@@ -806,6 +806,32 @@ static int truncate_error_page(struct page *p, unsigned long pfn,
 	return ret;
 }
 
+struct page_state {
+	unsigned long mask;
+	unsigned long res;
+	enum mf_action_page_type type;
+
+	/* Callback ->action() has to unlock the relevant page inside it. */
+	int (*action)(struct page_state *ps, struct page *p);
+};
+
+/*
+ * Return 0 if the refcount of given page is larger than
+ * expected value, otherwise -EBUSY.
+ */
+static int check_expected_count(struct page_state *ps,
+				struct page *p, int refcount)
+{
+	int count = page_count(p) - refcount;
+
+	if (count > 0) {
+		pr_err("Memory failure: %#lx: %s still referenced by %d users\n",
+		       page_to_pfn(p), action_page_types[ps->type], count);
+		return -EBUSY;
+	}
+	return 0;
+}
+
 /*
  * Error hit kernel page.
  * Do nothing, try to be lucky and not touch this instead. For a few cases we
@@ -834,6 +860,7 @@ static int me_pagecache_clean(struct page_state *ps, struct page *p)
 {
 	int ret;
 	struct address_space *mapping;
+	int expected_refcount = 1;
 
 	delete_from_lru_cache(p);
 
@@ -870,6 +897,10 @@ static int me_pagecache_clean(struct page_state *ps, struct page *p)
 	ret = truncate_error_page(p, page_to_pfn(p), mapping);
 out:
 	unlock_page(p);
+	if (ps->type == MF_MSG_DIRTY_SWAPCACHE && ret == MF_DELAYED)
+		expected_refcount = 2;
+	if (check_expected_count(ps, p, expected_refcount) < 0)
+		ret = MF_FAILED;
 	return ret;
 }
 
@@ -947,6 +978,7 @@ static int me_pagecache_dirty(struct page_state *ps, struct page *p)
 static int me_swapcache_dirty(struct page_state *ps, struct page *p)
 {
 	int ret;
+	int expected_refcount = 1;
 
 	ClearPageDirty(p);
 	/* Trigger EIO in shmem: */
@@ -954,6 +986,11 @@ static int me_swapcache_dirty(struct page_state *ps, struct page *p)
 
 	ret = delete_from_lru_cache(p) ? MF_FAILED : MF_DELAYED;
 	unlock_page(p);
+
+	if (ret == MF_DELAYED)
+		expected_refcount = 2;
+	if (check_expected_count(ps, p, expected_refcount) < 0)
+		ret = MF_FAILED;
 	return ret;
 }
 
@@ -965,6 +1002,9 @@ static int me_swapcache_clean(struct page_state *ps, struct page *p)
 
 	ret = delete_from_lru_cache(p) ? MF_FAILED : MF_RECOVERED;
 	unlock_page(p);
+
+	if (check_expected_count(ps, p, 1) < 0)
+		ret = MF_FAILED;
 	return ret;
 }
 
@@ -1003,6 +1043,8 @@ static int me_huge_page(struct page_state *ps, struct page *p)
 		}
 	}
 
+	if (check_expected_count(ps, p, 1) < 0)
+		res = MF_FAILED;
 	return res;
 }
 
@@ -1028,14 +1070,7 @@ static int me_huge_page(struct page_state *ps, struct page *p)
 #define slab		(1UL << PG_slab)
 #define reserved	(1UL << PG_reserved)
 
-static struct page_state {
-	unsigned long mask;
-	unsigned long res;
-	enum mf_action_page_type type;
-
-	/* Callback ->action() has to unlock the relevant page inside it. */
-	int (*action)(struct page_state *ps, struct page *p);
-} error_states[] = {
+static struct page_state error_states[] = {
 	{ reserved,	reserved,	MF_MSG_KERNEL,	me_kernel },
 	/*
 	 * free pages are specially detected outside this table:
@@ -1095,20 +1130,10 @@ static int page_action(struct page_state *ps, struct page *p,
 			unsigned long pfn)
 {
 	int result;
-	int count;
 
 	/* page p should be unlocked after returning from ps->action().  */
 	result = ps->action(ps, p);
 
-	count = page_count(p) - 1;
-	if ((ps->action == me_swapcache_dirty && result == MF_DELAYED) ||
-	    (ps->action == me_pagecache_dirty && result == MF_FAILED))
-		count--;
-	if (count > 0) {
-		pr_err("Memory failure: %#lx: %s still referenced by %d users\n",
-		       pfn, action_page_types[ps->type], count);
-		result = MF_FAILED;
-	}
 	action_result(pfn, ps->type, result);
 
 	/* Could do more checks here if page looks ok */
