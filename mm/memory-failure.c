@@ -1392,6 +1392,19 @@ static bool hwpoison_user_mappings(struct page *p, unsigned long pfn,
 	return unmap_success;
 }
 
+static struct page_state * __identify_page_state(struct page *p,
+						 unsigned long page_flags)
+{
+	struct page_state *ps;
+
+	for (ps = error_states;; ps++) {
+		if ((page_flags & ps->mask) != ps->res)
+			continue;
+		break;
+	}
+	return ps;
+}
+
 static int identify_page_state(unsigned long pfn, struct page *p,
 				unsigned long page_flags)
 {
@@ -1402,16 +1415,12 @@ static int identify_page_state(unsigned long pfn, struct page *p,
 	 * relevant information. The second check with the saved page flags is
 	 * carried out only if the first check can't determine the page status.
 	 */
-	for (ps = error_states;; ps++)
-		if ((p->flags & ps->mask) == ps->res)
-			break;
+	ps = __identify_page_state(p, p->flags);
 
 	page_flags |= (p->flags & (1UL << PG_dirty));
 
 	if (!ps->mask)
-		for (ps = error_states;; ps++)
-			if ((page_flags & ps->mask) == ps->res)
-				break;
+		ps = __identify_page_state(p, page_flags);
 	return page_action(ps, p, pfn);
 }
 
