@@ -106,8 +106,7 @@ asm (
 			".global optprobe_template_entry\n"
 			"optprobe_template_entry:\n"
 #ifdef CONFIG_X86_64
-			"       pushq $" __stringify(__KERNEL_DS) "\n"
-			/* Save the 'sp - 8', this will be fixed later. */
+			/* We don't bother saving the ss register */
 			"	pushq %rsp\n"
 			"	pushfq\n"
 			".global optprobe_template_clac\n"
@@ -122,17 +121,14 @@ asm (
 			".global optprobe_template_call\n"
 			"optprobe_template_call:\n"
 			ASM_NOP5
-			/* Copy 'regs->flags' into 'regs->ss'. */
+			/* Move flags to rsp */
 			"	movq 18*8(%rsp), %rdx\n"
-			"	movq %rdx, 20*8(%rsp)\n"
+			"	movq %rdx, 19*8(%rsp)\n"
 			RESTORE_REGS_STRING
-			/* Skip 'regs->flags' and 'regs->sp'. */
-			"	addq $16, %rsp\n"
-			/* And pop flags register from 'regs->ss'. */
+			/* Skip flags entry */
+			"	addq $8, %rsp\n"
 			"	popfq\n"
 #else /* CONFIG_X86_32 */
-			"	pushl %ss\n"
-			/* Save the 'sp - 4', this will be fixed later. */
 			"	pushl %esp\n"
 			"	pushfl\n"
 			".global optprobe_template_clac\n"
@@ -146,13 +142,12 @@ asm (
 			".global optprobe_template_call\n"
 			"optprobe_template_call:\n"
 			ASM_NOP5
-			/* Copy 'regs->flags' into 'regs->ss'. */
+			/* Move flags into esp */
 			"	movl 14*4(%esp), %edx\n"
-			"	movl %edx, 16*4(%esp)\n"
+			"	movl %edx, 15*4(%esp)\n"
 			RESTORE_REGS_STRING
-			/* Skip 'regs->flags' and 'regs->sp'. */
-			"	addl $8, %esp\n"
-			/* And pop flags register from 'regs->ss'. */
+			/* Skip flags entry */
+			"	addl $4, %esp\n"
 			"	popfl\n"
 #endif
 			".global optprobe_template_end\n"
@@ -184,8 +179,6 @@ optimized_callback(struct optimized_kprobe *op, struct pt_regs *regs)
 		kprobes_inc_nmissed_count(&op->kp);
 	} else {
 		struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
-		/* Adjust stack pointer */
-		regs->sp += sizeof(long);
 		/* Save skipped registers */
 		regs->cs = __KERNEL_CS;
 #ifdef CONFIG_X86_32
