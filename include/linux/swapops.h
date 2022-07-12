@@ -498,6 +498,11 @@ static inline void num_poisoned_pages_dec(void)
 	atomic_long_dec(&num_poisoned_pages);
 }
 
+static inline void num_poisoned_pages_sub(long i)
+{
+	atomic_long_sub(i, &num_poisoned_pages);
+}
+
 #else
 
 static inline swp_entry_t make_hwpoison_entry(struct page *page)
@@ -516,6 +521,10 @@ static inline struct page *hwpoison_entry_to_page(swp_entry_t entry)
 }
 
 static inline void num_poisoned_pages_inc(void)
+{
+}
+
+static inline void num_poisoned_pages_sub(long i)
 {
 }
 #endif
